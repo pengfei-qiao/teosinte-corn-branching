@@ -15,6 +15,7 @@ counts <- data.frame(cpm(y)[-which(apply(cpm(y), MARGIN = 1, FUN = filter_low_co
 
 tb1 = "AC233950.1_FG002"
 counts[match(tb1,rownames(counts)),]
+probes <- rownames(counts)
 
 
 # hclust for outlier detection
@@ -35,27 +36,27 @@ plot(sampleTree, main = "Sample dendrogram and trait heatmap")
 
 ### ML
 
-## --- LASSO ---
-data <- t(counts)
-target <- traits[-c(7,8)]
-# split into train (validation) and test sets
-set.seed(123)
-test <- sample(1:nrow(data),1/5*nrow(data)) # leave out test set
-data.test <- data[test,] # test set
-data <- data[-test,] # training and validation set
-ptm <- proc.time()
-require(glmnet)
-lasso.fit = cv.glmnet(data,as.factor(target[-test]),alpha = 1, lambda = 10^seq(-10,0,length=100), nfolds = nrow(data),family = "binomial",type.measure = "class")
-print(lasso.time <- proc.time() - ptm)
-plot(lasso.fit, xvar="lambda",main="LASSO")
-lasso.pred <- predict(lasso.fit,data.test,s=lasso.fit$lambda.min,"class")
-print(lasso.acc <- mean(lasso.pred == as.numeric(target[test])))
-
-tmp_coeffs <- coef(lasso.fit,s=lasso.fit$lambda.min)
-print(lasso.genes <- data.frame(name = tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1], coefficient = tmp_coeffs@x)) # https://stackoverflow.com/questions/27801130/extracting-coefficient-variable-names-from-glmnet-into-a-data-frame, the reason for +1 is that the @i method indexes from 0 for the intercept but @Dimnames[[1]] starts at 1
-print(lasso.Rsq <- lasso.fit$glmnet.fit$dev.ratio[which(lasso.fit$glmnet.fit$lambda==lasso.fit$lambda.min)])
-write.table(lasso.genes,"lasso.txt",quote=F,sep="\t")
-
+# ## --- LASSO --- features are correlated, so elastic net outperforms LASSO
+# data <- t(counts)
+# target <- traits[-c(7,8)]
+# # split into train (validation) and test sets
+# set.seed(123)
+# test <- sample(1:nrow(data),1/5*nrow(data)) # leave out test set
+# data.test <- data[test,] # test set
+# data <- data[-test,] # training and validation set
+# ptm <- proc.time()
+# require(glmnet)
+# lasso.fit = cv.glmnet(data,as.factor(target[-test]),alpha = 1, lambda = 10^seq(-10,0,length=100), nfolds = nrow(data),family = "binomial",type.measure = "class")
+# print(lasso.time <- proc.time() - ptm)
+# plot(lasso.fit, xvar="lambda",main="LASSO")
+# lasso.pred <- predict(lasso.fit,data.test,s=lasso.fit$lambda.min,"class")
+# print(lasso.acc <- mean(lasso.pred == as.numeric(target[test])))
+# 
+# tmp_coeffs <- coef(lasso.fit,s=lasso.fit$lambda.min)
+# print(lasso.genes <- data.frame(name = tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1], coefficient = tmp_coeffs@x)) # https://stackoverflow.com/questions/27801130/extracting-coefficient-variable-names-from-glmnet-into-a-data-frame, the reason for +1 is that the @i method indexes from 0 for the intercept but @Dimnames[[1]] starts at 1
+# print(lasso.Rsq <- lasso.fit$glmnet.fit$dev.ratio[which(lasso.fit$glmnet.fit$lambda==lasso.fit$lambda.min)])
+# write.table(lasso.genes,"lasso.txt",quote=F,sep="\t")
+# 
 
 ## --- Elastic net ---
 data <- t(counts)
@@ -77,7 +78,19 @@ tmp_coeffs <- coef(elnet.fit,s=elnet.fit$lambda.min)
 print(elnet.genes <- data.frame(name = tmp_coeffs@Dimnames[[1]][tmp_coeffs@i + 1], coefficient = tmp_coeffs@x)) # https://stackoverflow.com/questions/27801130/extracting-coefficient-variable-names-from-glmnet-into-a-data-frame, the reason for +1 is that the @i method indexes from 0 for the intercept but @Dimnames[[1]] starts at 1
 elnet.genes <- elnet.genes[order(abs(elnet.genes[,2]),decreasing = TRUE),]
 print(elnet.Rsq <- elnet.fit$glmnet.fit$dev.ratio[which(elnet.fit$glmnet.fit$lambda==elnet.fit$lambda.min)])
+hardboundary <- c()
+for (i in 2:41){
+  teosinte.lower = min(counts[which(probes %in% elnet.genes[i,1]),][which(target != 0)])
+  teosinte.upper = max(counts[which(probes %in% elnet.genes[i,1]),][which(target != 0)])
+  maize.lower = min(counts[which(probes %in% elnet.genes[i,1]),][which(target == 0)])
+  maize.upper = max(counts[which(probes %in% elnet.genes[i,1]),][which(target == 0)])
+  if (teosinte.lower > maize.upper) {hardboundary <-c(hardboundary,i)}
+  if (teosinte.upper < maize.lower) {hardboundary <- c(hardboundary,i)}
+}
+elnet.genes$hardboundary <- rep(0,dim(elnet.genes)[1])
+elnet.genes$hardboundary[hardboundary] <- 1
 write.table(elnet.genes,"elnet.txt",quote=F,sep="\t")
+
 
 ## --- Random Forest ---
 require(randomForest)
@@ -92,8 +105,7 @@ set.seed(123)
 rf.cv <- rfcv(data[,-dim(data)[2]],data$target,cv.fold=nrow(data)) # to select mtry for randomForest
 with(rf.cv, plot(n.var, error.cv, log="x", type="o", lwd=2))
 pdf("./figures/rf.loocv.pdf")
-par(mfrow=c(1,1))
-plot(rf.cv$n.var, rf.cv$error.cv, log="x", type="o", lwd=2, xlab = "Number of Variables", ylab = "LOOCV")
+plot(rf.cv$n.var, rf.cv$error.cv, log="x", type="o", lwd=2, xlab = "Number of Variables", ylab = "LOOCV Error Rate")
 dev.off()
 data <- t(counts)
 target <- traits[-c(7,8)]
@@ -116,67 +128,67 @@ varImpPlot(rf, scale = FALSE)
 dev.off()
 rf.pred <- predict(rf,newdata=data.test,type="response")
 print(rf.acc <- mean(rf.pred == as.numeric(target[test])))
-rf # OOB estimate of error rate: 17.24%
+rf # OOB estimate of error rate: 16.67%
 #getTree(rf,1)
 
 
-## --- XGBoost ---
-require(xgboost)
-data <- t(counts)
-target <- traits[-c(7,8)]
-# split into train (validation) and test sets
-set.seed(123)
-test <- sample(1:nrow(data),1/5*nrow(data)) # leave out test set
-data.test <- data[test,] # test set
-data <- data[-test,]
-ptm <- proc.time()
-dtrain <- xgb.DMatrix(data=data,label=target[-test])
-numberOfClasses <- 2
-
-# algorithm parameters for XGBoost
-param <- list("objective" = "multi:softprob",
-              "eval_metric" = "mlogloss",
-              "num_class" = numberOfClasses)
-
-# tune parameters by cv
-xgbtune <- function(a,b,c,d) {
-  xgbcv <- xgb.cv(data = dtrain, 
-                params = param,
-                nfold=nrow(data),
-                nrounds = a, 
-                max.depth = b,     # tree depth (not the same as interaction.depth in gbm!)
-                eta = c,
-                gamma = d)
-  e <- xgbcv$evaluation_log
-  # pdf("./figures/xgboostcv.pdf")
-  plot(e$iter, e$train_mlogloss_mean, type = "o",col="blue",ylim=c(0,max(e$test_mlogloss_mean)),lwd = 2,xlab="Number of Trees", ylab="Error Rate")
-  lines(e$iter,e$test_mlogloss_mean, type = "o",col="red")  
-  legend("right",legend=c("training error","test error"),col=c("blue","red"),lty=1,cex=1.2)
-  # dev.off()
-  print(e$iter[which(e$test_mlogloss_mean == min(e$test_mlogloss_mean))])
-}
-
-xgbtune(50,4,0.1,10)
-
-nround <- 22 # number of rounds/trees
-ptm <- proc.time()
-set.seed(123)
-xgbtree <- xgb.train(params=param, 
-                   data = dtrain, 
-                   nrounds = nround, 
-                   max.depth = 4,     # tree depth (not the same as interaction.depth in gbm!)
-                   eta = 0.1,           # shrinkage parameter
-                   lambda = 10)
-print(xgbtree.time <- proc.time() - ptm)    
-
-xgbtree.prob <- predict(xgbtree, data.test)
-xgbtree.prob <- t(matrix(xgbtree.prob, nrow=numberOfClasses, ncol=nrow(data.test)) ) # need to convert it to a matrix
-xgbtree.pred <-apply(xgbtree.prob, 1, which.max) - 1 # use the class with maximum probability as prediction
-table(xgbtree.pred, target[test])
-print(xgbtree.acc <- mean(xgbtree.pred == as.numeric(target[test])))  # classification accuracy on test set
-print(xgbtree.imp <- xgb.importance(colnames(data), model=xgbtree))
-xgb.plot.importance(xgbtree.imp)
-xgb.genes <- "GRMZM2G019721"
+# ## --- XGBoost --- high LOOCV error rate
+# require(xgboost)
+# data <- t(counts)
+# target <- traits[-c(7,8)]
+# # split into train (validation) and test sets
+# set.seed(123)
+# test <- sample(1:nrow(data),1/5*nrow(data)) # leave out test set
+# data.test <- data[test,] # test set
+# data <- data[-test,]
+# ptm <- proc.time()
+# dtrain <- xgb.DMatrix(data=data,label=target[-test])
+# numberOfClasses <- 2
+# 
+# # algorithm parameters for XGBoost
+# param <- list("objective" = "multi:softprob",
+#               "eval_metric" = "mlogloss",
+#               "num_class" = numberOfClasses)
+# 
+# # tune parameters by cv
+# xgbtune <- function(a,b,c,d) {
+#   xgbcv <- xgb.cv(data = dtrain, 
+#                 params = param,
+#                 nfold=nrow(data),
+#                 nrounds = a, 
+#                 max.depth = b,     # tree depth (not the same as interaction.depth in gbm!)
+#                 eta = c,
+#                 gamma = d)
+#   e <- xgbcv$evaluation_log
+#   # pdf("./figures/xgboostcv.pdf")
+#   plot(e$iter, e$train_mlogloss_mean, type = "o",col="blue",ylim=c(0,max(e$test_mlogloss_mean)),lwd = 2,xlab="Number of Trees", ylab="Error Rate")
+#   lines(e$iter,e$test_mlogloss_mean, type = "o",col="red")  
+#   legend("right",legend=c("training error","test error"),col=c("blue","red"),lty=1,cex=1.2)
+#   # dev.off()
+#   print(e$iter[which(e$test_mlogloss_mean == min(e$test_mlogloss_mean))])
+# }
+# 
+# xgbtune(50,4,0.1,10)
+# 
+# nround <- 22 # number of rounds/trees
+# ptm <- proc.time()
+# set.seed(123)
+# xgbtree <- xgb.train(params=param, 
+#                    data = dtrain, 
+#                    nrounds = nround, 
+#                    max.depth = 4,     # tree depth (not the same as interaction.depth in gbm!)
+#                    eta = 0.1,           # shrinkage parameter
+#                    lambda = 10)
+# print(xgbtree.time <- proc.time() - ptm)    
+# 
+# xgbtree.prob <- predict(xgbtree, data.test)
+# xgbtree.prob <- t(matrix(xgbtree.prob, nrow=numberOfClasses, ncol=nrow(data.test)) ) # need to convert it to a matrix
+# xgbtree.pred <-apply(xgbtree.prob, 1, which.max) - 1 # use the class with maximum probability as prediction
+# table(xgbtree.pred, target[test])
+# print(xgbtree.acc <- mean(xgbtree.pred == as.numeric(target[test])))  # classification accuracy on test set
+# print(xgbtree.imp <- xgb.importance(colnames(data), model=xgbtree))
+# xgb.plot.importance(xgbtree.imp)
+# xgb.genes <- "GRMZM2G019721"
 
 ## ---Naive Bayes---
 require(e1071)
@@ -195,7 +207,7 @@ for (i in 1:nrow(data)) {
   nb.pred <- predict(nb.fit,t(data[i,]))
   nb.acc.loocv[i] <- mean(nb.pred == target[i])
 }
-print(sum(nb.acc.loocv)/length(nb.acc.loocv)) # 0.8518519
+print(sum(nb.acc.loocv)/length(nb.acc.loocv)) # 0.7916667
 
 # calculate information gain for each feature - stackoverflow when ran in RStudio. So run in terminal:Rscript --max-ppsize=500000 infogain.R
 # require(FSelector)
@@ -263,10 +275,10 @@ print(nb.acc <- mean(nb.pred == target[test]))
 # probes <- names(datExpr)
 # 
 # # get union of candidate genes
-lasso.genes <- as.character(lasso.genes[,1])[2]
-elnet.genes <- as.character(elnet.genes[,1][2:(length(elnet.genes[,1]))])
-rf.genes <- rf.genes[1:(0.2*length(rf.genes))]
-nb.genes <- nb.genes[1:(0.2*length(nb.genes))]
+# lasso.genes <- as.character(lasso.genes[,1])[2]
+# elnet.genes <- as.character(elnet.genes[,1][2:(length(elnet.genes[,1]))])
+# rf.genes <- rf.genes[1:(0.2*length(rf.genes))]
+# nb.genes <- nb.genes[1:(0.2*length(nb.genes))]
 # candidates <- union(union(union(lasso.genes,elnet.genes),union(rf.genes,xgb.genes)),nb.genes)
 # 
 # modProbes=probes[is.finite(match(probes,candidates))]
@@ -372,23 +384,23 @@ nb.genes <- nb.genes[1:(0.2*length(nb.genes))]
 # 
 # ## ---map decision boundaries for gene candidates---
 # 
-
-probes <- names(data.frame(t(counts)))
-lines <- target
-lines[which(target == 0)] = c("CML103","Ki11","Ki11","B73","Oh43")
-
-# LASSO candidate
-plot(as.numeric(counts[which(probes %in% lasso.genes),]),target,type="n") # very linear decision boundary
-text(as.numeric(counts[which(probes %in% lasso.genes),]),target,lines)
-
-# Elastic net candidates
-plot(as.numeric(counts[which(probes %in% elnet.genes)[1],]), as.numeric(counts[which(probes %in% elnet.genes)[2],]),type="n")
-text(as.numeric(counts[which(probes %in% elnet.genes)[1],]), as.numeric(counts[which(probes %in% elnet.genes)[2],]),lines) # very linear decision boundary
-
-# Random forest candidates
-plot(as.numeric(counts[which(probes %in% rf.genes)[1],]), as.numeric(counts[which(probes %in% rf.genes)[2],]),type="n")
-text(as.numeric(counts[which(probes %in% rf.genes)[1],]), as.numeric(counts[which(probes %in% rf.genes)[2],]),lines) # very linear decision boundary
-
-# xgboost candidate
-plot(as.numeric(counts[which(probes %in% xgb.genes),]),target,type="n") # very linear decision boundary
-text(as.numeric(counts[which(probes %in% xgb.genes),]),target,lines)
+# 
+# probes <- names(data.frame(t(counts)))
+# lines <- target
+# lines[which(target == 0)] = c("CML103","Ki11","Ki11","B73","Oh43")
+# 
+# # LASSO candidate
+# plot(as.numeric(counts[which(probes %in% lasso.genes),]),target,type="n") # very linear decision boundary
+# text(as.numeric(counts[which(probes %in% lasso.genes),]),target,lines)
+# 
+# # Elastic net candidates
+# plot(as.numeric(counts[which(probes %in% elnet.genes)[1],]), as.numeric(counts[which(probes %in% elnet.genes)[2],]),type="n")
+# text(as.numeric(counts[which(probes %in% elnet.genes)[1],]), as.numeric(counts[which(probes %in% elnet.genes)[2],]),lines) # very linear decision boundary
+# 
+# # Random forest candidates
+# plot(as.numeric(counts[which(probes %in% rf.genes)[1],]), as.numeric(counts[which(probes %in% rf.genes)[2],]),type="n")
+# text(as.numeric(counts[which(probes %in% rf.genes)[1],]), as.numeric(counts[which(probes %in% rf.genes)[2],]),lines) # very linear decision boundary
+# 
+# # xgboost candidate
+# plot(as.numeric(counts[which(probes %in% xgb.genes),]),target,type="n") # very linear decision boundary
+# text(as.numeric(counts[which(probes %in% xgb.genes),]),target,lines)
