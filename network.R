@@ -46,10 +46,9 @@ e <- nb.genes <- as.character(read.table("./cutoff-1-cpm/original-dimension/nbci
 require(VennDiagram)
 require(venn)
 pdf("./venn.pdf",width = 7,height= 7)
-draw.quintuple.venn(124 ,41, 2368, 118, 913  ,  2 ,  29 , 118 ,  26  , 32  ,  2 ,  40 ,  29  ,495,   26,
-                    1  ,  2 ,   2 ,  29 ,  17,   26  ,  1  , 32    ,2,   17 ,   1 ,   1,    2,   17 ,   1,  1,
+draw.quintuple.venn(124,41,2348,118,913,2,29,118,26,32,2,40,29,495,26,1,2,2,29,17,26,1,32,2,17,1,1,2,17,1,1,
                     category = c("LASSO", "Elastic Net", "Random Forest", "Boosted Tree", "Naive Bayes"),
-                    cat.dist = 0.09)
+                    cat.dist = 0.06,cat.cex=1.4)
 dev.off()
 
 # # to test if the non-overlapping features are highly correlated
@@ -145,6 +144,16 @@ net <- network(net, directed = FALSE)
 degree.int <- c()
 for (i in 1:length(degree)) {degree.int[i] <- sum(net[i,])}
 col <- colorRampPalette(c('grey', 'black'))(length(degree))[rank(degree)]
+
+# tf <- as.character(read.table("tf.txt")[,1])
+# hormone <- as.character(read.table("hormone.txt")[,1])
+# senescence <- as.character(read.table("senescence.txt")[,1])
+# growth <- as.character(read.table("growth.txt")[,1])
+# col <- rep("black",781)
+# col[which(probes[index][-discardindx] %in% c(tf,hormone,growth,senescence))] <- "red"
+# ggnet2(net, color = col,node.size = 1.5,edge.size = 0.1) + 
+#   guides(color = FALSE, size = FALSE)
+
 set.seed(123)
 pdf("./gcn.pdf")
 ggnet2(net, color = col,node.size = 1.5,edge.size = 0.1) + 
@@ -168,15 +177,49 @@ write.table(gcn,"GCN.txt",sep="\t",quote=FALSE,col.names=NA)
 # LASSO candidate
 plot(as.numeric(counts[which(probes %in% "GRMZM2G070649"),]),target) # very linear decision boundary
 
+# test if one single gene determining boundary
+hardboundary <- c()
+for (i in 1:2873){
+  if (candidates[i] != "(Intercept)") {
+    teosinte.lower = min(counts[which(probes %in% candidates[i]),][which(target != 0)])
+    teosinte.upper = max(counts[which(probes %in% candidates[i]),][which(target != 0)])
+    maize.lower = min(counts[which(probes %in% candidates[i]),][which(target == 0)])
+    maize.upper = max(counts[which(probes %in% candidates[i]),][which(target == 0)])
+    if (teosinte.lower > maize.upper) {hardboundary <-c(hardboundary,i)}
+    if (teosinte.upper < maize.lower) {hardboundary <- c(hardboundary,i)}
+  }
+}
+
+# test epistasis
+require(e1071)
+linear_boundary <- function(m,n) {
+  data <- data.frame(t(counts)[,c(which(probes %in% candidates[m]),which(probes %in% candidates[n]))])
+  data$target <- as.factor(traits[-c(7,8)])
+  svm.fit <- svm(target ~., data=data, kernel = "linear", scale=TRUE)
+  if (sum(predict(svm.fit,data) == target) == length(target)) (return(TRUE))
+  else {return(FALSE)}
+}
+gene_with_partner = c()
+for (i in 1:2873) {
+  not_found = TRUE
+  j = i+1
+  while (j <= 2873 & not_found) {
+    if (linear_boundary(i,j)) {not_found=FALSE;print(i);gene_with_partner <- c(gene_with_partner,i,j)}
+    else {j = j+1}
+    }
+}
+gene_with_partner1 <- gene_with_partner[seq(1,2653*2,2)]
+gene_with_partner2 <- gene_with_partner[seq(1,2653*2,2)]
+write.table(data.frame(gene=gene_with_partner1,first_partner=gene_with_partner2),"./epistasis.txt",sep="\t",quote=F,col.names = NA)
+
+
 # Elastic net candidates
 pdf("./elnet-candidates-interaction.pdf")
-plot(as.numeric(counts[which(probes %in% elnet.genes)[3],]), as.numeric(counts[which(probes %in% elnet.genes)[6],]),type="n", xlab=elnet.genes[3], ylab=elnet.genes[6]) 
-text(as.numeric(counts[which(probes %in% elnet.genes)[3],]), as.numeric(counts[which(probes %in% elnet.genes)[6],]),target) # very linear decision boundary
+plot(as.numeric(counts[which(probes %in% elnet.genes[3]),]), as.numeric(counts[which(probes %in% elnet.genes[6]),]),type="n", xlab=elnet.genes[3], ylab=elnet.genes[6]) 
+text(as.numeric(counts[which(probes %in% elnet.genes[3]),]), as.numeric(counts[which(probes %in% elnet.genes[6]),]),target) # very linear decision boundary
 abline(a=2.8, b = -0.5, col="red")
 dev.off()
 
 # Random forest candidates
 plot(as.numeric(counts[which(probes %in% rf.genes)[1],]), as.numeric(counts[which(probes %in% rf.genes)[2],]),type="n") 
 text(as.numeric(counts[which(probes %in% rf.genes)[1],]), as.numeric(counts[which(probes %in% rf.genes)[2],]),target) # very linear decision boundary
-
-
